@@ -667,6 +667,21 @@ bool llama_context::update_cache_copies() {
             }
         }
     }
+
+    // DSA indexer-key cache: patch the kr_l write offset for reused graphs
+    for (size_t il = 0; il < dsa_cache_copies.size(); ++il) {
+        auto & c = dsa_cache_copies[il];
+        if (!c.cpy) continue;
+        if (c.cpy->op != GGML_OP_CPY ||
+            il >= kv_self.kr_l.size() || kv_self.kr_l[il] == nullptr ||
+            c.cpy->view_src != kv_self.kr_l[il]) {
+            return false;
+        }
+        c.cpy->view_offs    = kv_self.head * c.step;
+        c.cpy->src[1]->data = (char *) kv_self.kr_l[il]->data + c.cpy->view_offs;
+        c.cpy->data         = c.cpy->src[1]->data;
+    }
+
     return true;
 }
 
@@ -678,6 +693,9 @@ llama_context::llama_context(const llama_model & model)
     } else {
         cache_copies.resize(2*hparams.n_layer);
     }
+    // DSA indexer-key cache copy. Entries stay null for non-DSA models and non-indexer layers,
+    // so update_cache_copies() is a no-op when DSA is off.
+    dsa_cache_copies.resize(hparams.n_layer);
 }
 
 void llama_context::set_mtp_op_type(llama_mtp_op_type value) {
@@ -2200,6 +2218,17 @@ static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
         LLAMA_LOG_INFO("%s: expert_weights_norm  = %d\n",     __func__, hparams.expert_weights_norm);
         LLAMA_LOG_INFO("%s: expert_gating_func   = %s\n",     __func__, llama_expert_gating_func_name((llm_expert_gating_func_type) hparams.expert_gating_func));
         LLAMA_LOG_INFO("%s: nextn_predict_layers = %d\n",     __func__, hparams.nextn_predict_layers);
+    }
+
+    if (model.arch == LLM_ARCH_GLM5NEXT) {
+        LLAMA_LOG_INFO("%s: kda_gate_lower_bound   = %f\n", __func__, hparams.kda_gate_lower_bound);
+        LLAMA_LOG_INFO("%s: hyper_connection.count = %u\n", __func__, hparams.dsv4_hc_mult);
+        LLAMA_LOG_INFO("%s: sinkhorn_iterations    = %u\n", __func__, hparams.dsv4_hc_sinkhorn_iters);
+        LLAMA_LOG_INFO("%s: indexer_n_head         = %u\n", __func__, hparams.indexer_n_head);
+        LLAMA_LOG_INFO("%s: indexer_head_size      = %u\n", __func__, hparams.indexer_head_size);
+        LLAMA_LOG_INFO("%s: indexer_top_k          = %u\n", __func__, hparams.indexer_top_k);
+        LLAMA_LOG_INFO("%s: indexer_block_size     = %u\n", __func__, hparams.indexer_block_size);
+        LLAMA_LOG_INFO("%s: nextn_predict_layers   = %d\n", __func__, hparams.nextn_predict_layers);
     }
 
     vocab.print_info();

@@ -256,7 +256,7 @@ if (GGML_BLAS)
     endif()
 endif()
 
-set (GGML_SOURCES_IQK iqk/iqk_quantize.cpp iqk/iqk_cpu_ops.cpp)
+set (GGML_SOURCES_IQK iqk/iqk_quantize.cpp iqk/iqk_cpu_ops.cpp iqk/iqk_kda.cpp)
 set (GGML_HEADERS_IQK iqk/iqk_config.h iqk/iqk_cpu_ops.h)
 if (GGML_IQK_MUL_MAT)
     message(STATUS "Using optimized iqk matrix multiplications")

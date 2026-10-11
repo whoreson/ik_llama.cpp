@@ -1736,19 +1736,6 @@ bool iqk_fused_delta_net(int head_dim, int n_heads, int gqa_ratio, int repeat_ty
     return true;
 }
 
-// Stub for KDA fused delta-net (channel-gate variant)
-// Always returns false to use the slow C++ path in ggml_compute_forward_kda_f32
-IQK_API bool iqk_kda(int32_t /* head_dim */, int32_t /* n_heads */, int32_t /* gqa_ratio */, int32_t /* repeat_type */,
-        int32_t /* n_tokens */, int32_t /* n_seqs */,
-        size_t /* vnb1 */, size_t /* vnb2 */, size_t /* vnb3 */,
-        const size_t /* gnb */[4], const size_t /* bnb */[4],
-        const float * /* q_data */, const float * /* k_data */, const float * /* v_data */,
-        const float * /* g_data */, const float * /* beta_data */, const float * /* state_in */,
-        float * /* out_data */, float * /* state_working */, float * /* saved_steps */,
-        int32_t /* state_step_stride */, int32_t /* ith */, int32_t /* nth */) {
-    return false;
-}
-
 #else  // IQK_IMPLEMENT
 
 #include "ggml-impl.h"
@@ -1789,16 +1776,15 @@ bool iqk_fused_delta_net(int, int, int, int, int, int,
     return false;
 }
 
-// Stub for KDA fused delta-net (channel-gate variant)
-// Always returns false to use the slow C++ path in ggml_compute_forward_kda_f32
-bool iqk_kda(int32_t /* head_dim */, int32_t /* n_heads */, int32_t /* gqa_ratio */, int32_t /* repeat_type */,
-        int32_t /* n_tokens */, int32_t /* n_seqs */,
-        size_t /* vnb1 */, size_t /* vnb2 */, size_t /* vnb3 */,
-        const size_t /* gnb */[4], const size_t /* bnb */[4],
-        const float * /* q_data */, const float * /* k_data */, const float * /* v_data */,
-        const float * /* g_data */, const float * /* beta_data */, const float * /* state_in */,
-        float * /* out_data */, float * /* state_working */, float * /* saved_steps */,
-        int32_t /* state_step_stride */, int32_t /* ith */, int32_t /* nth */) {
+// KDA fused delta-net stub for unsupported CPUs (real impl in iqk_kda.cpp)
+bool iqk_kda(int32_t, int32_t, int32_t, int32_t,
+        int32_t, int32_t,
+        size_t, size_t, size_t,
+        const size_t [4], const size_t [4],
+        const float *, const float *, const float *,
+        const float *, const float *, const float *,
+        float *, float *, float *,
+        int32_t, int32_t, int32_t) {
     return false;
 }
 
