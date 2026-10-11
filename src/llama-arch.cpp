@@ -76,6 +76,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_SEED_OSS,        "seed_oss"     },
     { LLM_ARCH_STEP35,          "step35"       },
     { LLM_ARCH_GLM_DSA,         "glm-dsa"      },
+    { LLM_ARCH_GLM5NEXT,        "glm5next"     },
     { LLM_ARCH_MISTRAL4,        "mistral4"     },
     { LLM_ARCH_GEMMA4,          "gemma4"       },
     { LLM_ARCH_GEMMA4_MTP,      "gemma4_mtp"   },
@@ -154,6 +155,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_VALUE_LENGTH,           "%s.attention.value_length"           },
     { LLM_KV_ATTENTION_LAYERNORM_EPS,          "%s.attention.layer_norm_epsilon"     },
     { LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,      "%s.attention.layer_norm_rms_epsilon" },
+    { LLM_KV_ATTENTION_LAYERNORM_RMS_EPS_FFN,  "%s.attention.ffn_layer_norm_rms_epsilon" },
     { LLM_KV_ATTENTION_CAUSAL,                 "%s.attention.causal"                 },
     { LLM_KV_ATTENTION_Q_LORA_RANK,            "%s.attention.q_lora_rank"            },
     { LLM_KV_ATTENTION_KV_LORA_RANK,           "%s.attention.kv_lora_rank"           },
@@ -169,6 +171,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,     "%s.attention.indexer.head_count"     },
     { LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,     "%s.attention.indexer.key_length"     },
     { LLM_KV_ATTENTION_INDEXER_TOP_K,          "%s.attention.indexer.top_k"          },
+    { LLM_KV_ATTENTION_INDEXER_KPOOL,          "%s.attention.indexer.kpool"          },
     { LLM_KV_FULL_ATTENTION_INTERVAL,          "%s.full_attention_interval"          },
     { LLM_KV_ATTENTION_SHARED_KV_LAYERS,       "%s.attention.shared_kv_layers"       },
     { LLM_KV_ATTENTION_KEY_LENGTH_SWA,         "%s.attention.key_length_swa"         },
@@ -203,6 +206,14 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_SSM_STATE_SIZE,                "%s.ssm.state_size"     },
     { LLM_KV_SSM_TIME_STEP_RANK,            "%s.ssm.time_step_rank" },
     { LLM_KV_SSM_GROUP_COUNT,               "%s.ssm.group_count"    },
+    { LLM_KV_SSM_HEAD_DIM,                  "%s.ssm.head_dim"         },
+    { LLM_KV_SSM_GATE_LOWER_BOUND,          "%s.ssm.gate_lower_bound" },
+    { LLM_KV_KDA_HEAD_DIM,                  "%s.kda.head_dim"       },
+    { LLM_KV_KDA_GATE_LOWER_BOUND,          "%s.kda.gate_lower_bound" },
+
+    { LLM_KV_HYPER_CONNECTION_COUNT,               "%s.hyper_connection.count"               },
+    { LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, "%s.hyper_connection.sinkhorn_iterations" },
+    { LLM_KV_HYPER_CONNECTION_EPSILON,             "%s.hyper_connection.epsilon"             },
 
     { LLM_KV_TOKENIZER_MODEL,                "tokenizer.ggml.model"                    },
     { LLM_KV_TOKENIZER_PRE,                  "tokenizer.ggml.pre"                      },
@@ -274,6 +285,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
     case LLM_ARCH_QWEN3NEXT:
     case LLM_ARCH_QWEN35MOE:
     case LLM_ARCH_QWEN35:
+    case LLM_ARCH_GLM5NEXT:
         return true;
     default:
         return false;

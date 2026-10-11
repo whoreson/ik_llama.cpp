@@ -24,6 +24,15 @@ struct delta_net {
     ggml_tensor * build_layer_attn_linear(ggml_context * ctx0, ggml_cgraph * gf,
             ggml_tensor * cur, ggml_tensor * inp_out_ids, int il, const llm_build_cb & cb) const;
 
+    ggml_tensor * build_layer_attn_kda_core(ggml_context * ctx0, ggml_cgraph * gf,
+            ggml_tensor * delta_input, ggml_tensor * inp_s_seq_qnext, ggml_tensor * inp_out_ids,
+            uint32_t state_seq_id_local, bool reset_state_local, int il, const llm_build_cb & cb,
+            bool add_residual) const;
+
+    ggml_tensor * build_layer_attn_kda(ggml_context * ctx0, ggml_cgraph * gf,
+            ggml_tensor * cur, ggml_tensor * inp_out_ids, int il, const llm_build_cb & cb,
+            bool add_residual) const;
+
 private:
 
     llama_context     & lctx;

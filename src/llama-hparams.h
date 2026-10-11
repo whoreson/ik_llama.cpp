@@ -62,6 +62,7 @@ struct llama_hparams {
 
     float f_norm_eps;
     float f_norm_rms_eps;
+    float f_norm_rms_eps_ffn = 0.0f;
     float f_norm_group_eps;
 
     float f_attn_logit_softcapping   = 50.0f;
@@ -93,6 +94,15 @@ struct llama_hparams {
     uint32_t ssm_d_state = 0;
     uint32_t ssm_dt_rank = 0;
     uint32_t ssm_n_group = 0;
+    uint32_t ssm_head_dim = 0;
+    float    kda_gate_lower_bound = 0.0f; // KDA bounded sigmoid gate
+    uint32_t indexer_block_size = 0; // k-pool indexer: tokens per compressed key cell
+
+    // for hyper-connections (mHC)
+    uint32_t dsv4_hc_mult           = 0;
+    uint32_t dsv4_hc_sinkhorn_iters = 0;
+    float    dsv4_hc_eps             = 0.0f;
+    uint32_t dsv4_hc_rank            = 0;
 
     // for hybrid state-space models (e.g. qwen3next)
     std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
@@ -127,6 +137,7 @@ struct llama_hparams {
     uint32_t indexer_n_head    = 0;
     uint32_t indexer_head_size = 0;
     uint32_t indexer_top_k     = 0;
+    std::array<bool, LLAMA_MAX_LAYERS> indexer_is_full = {};
 
 	// qwen3vl deepstack
     uint32_t n_deepstack_layers = 0;
@@ -196,6 +207,7 @@ struct llama_hparams {
 
         if (!is_float_close(this->f_norm_eps,            other.f_norm_eps,            EPSILON)) return true;
         if (!is_float_close(this->f_norm_rms_eps,        other.f_norm_rms_eps,        EPSILON)) return true;
+        if (!is_float_close(this->f_norm_rms_eps_ffn,    other.f_norm_rms_eps_ffn,    EPSILON)) return true;
         if (!is_float_close(this->rope_attn_factor,      other.rope_attn_factor,      EPSILON)) return true;
         if (!is_float_close(this->rope_freq_base_train,  other.rope_freq_base_train,  EPSILON)) return true;
         if (!is_float_close(this->rope_freq_scale_train, other.rope_freq_scale_train, EPSILON)) return true;

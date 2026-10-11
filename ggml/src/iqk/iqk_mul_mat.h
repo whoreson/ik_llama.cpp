@@ -78,6 +78,16 @@ IQK_API bool iqk_fused_delta_net(int head_dim, int n_heads, int gqa_ratio, int r
         const float * q_data, const float * k_data, const float * v_data, const float * g_data, const float * beta_data,
         const float * state_in, float * out_data, float * state_out, float * saved_steps, int state_step_stride, int ith, int nth);
 
+// KDA fused delta-net (channel-gate variant, used by GLM-5.3-Flash / kimi-k3)
+IQK_API bool iqk_kda(int32_t head_dim, int32_t n_heads, int32_t gqa_ratio, int32_t repeat_type,
+        int32_t n_tokens, int32_t n_seqs,
+        size_t vnb1, size_t vnb2, size_t vnb3,
+        const size_t gnb[4], const size_t bnb[4],
+        const float * q_data, const float * k_data, const float * v_data,
+        const float * g_data, const float * beta_data, const float * state_in,
+        float * out_data, float * state_working, float * saved_steps,
+        int32_t state_step_stride, int32_t ith, int32_t nth);
+
 #ifdef __cplusplus
 }
 #endif

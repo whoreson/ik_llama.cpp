@@ -888,6 +888,12 @@ static bool llama_kv_cache_init(
     if (needs_v_cache) cache.v_l.reserve(n_layer);
     cache.s_l.resize(n_layer, nullptr);
 
+    // DSA indexer key cache: resize for GLM_DSA and GLM5NEXT
+    const bool has_glm_dsa_indexer = (model.arch == LLM_ARCH_GLM_DSA || model.arch == LLM_ARCH_GLM5NEXT) && hparams.indexer_head_size > 0;
+    if (has_glm_dsa_indexer) {
+        cache.kr_l.resize(n_layer, nullptr);
+    }
+
     std::vector<size_t> mem_split(model.splits.size(), 0);
 
     const uint32_t qnext_state_slots = llama_qwen3next_state_slots(cparams, kv_size);
@@ -920,6 +926,40 @@ static bool llama_kv_cache_init(
         ggml_tensor * k = nullptr;
         ggml_tensor * v = nullptr;
         ggml_tensor * s = nullptr;
+        if (qnext_recurrent) {
+            s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.n_embd_v_s(), qnext_state_slots);
+            auto s_name = std::string{"cache_s_l"} + std::to_string(i);
+            ggml_set_name(s, s_name.c_str());
+            cache.s_l[i] = s;
+            cache.k_l.push_back(nullptr);
+            cache.v_l.push_back(nullptr);
+            LLAMA_LOG_DEBUG("=== Created recurrent cache %s as %ld x %ld x %ld x %ld\n", s->name, s->ne[0], s->ne[1], s->ne[2], s->ne[3]);
+            if (split_cache && model.layers[i].ssm_out->extra) {
+                auto split_ssm_out = (const ggml_split_tensor_t *)model.layers[i].ssm_out->extra;
+                GGML_ASSERT(split_ssm_out);
+                int num_v_heads = hparams.ssm_dt_rank;
+                int head_v_dim  = hparams.ssm_d_inner / num_v_heads;
+                int n_device = split_ssm_out->n_device;
+                auto & split_s_l = cache.split_s_l.emplace_back();
+                split_s_l.tensor_splits.resize(n_device, nullptr);
+                for (int is = 0; is < n_device; ++is) {
+                    auto split = split_ssm_out->splits[is];
+                    if (!split) continue;
+                    GGML_ASSERT(split->ne[0] % head_v_dim == 0);
+                    int nv = split->ne[0] / head_v_dim;
+                    auto size = hparams.n_embd_v_s_id(nv);
+                    split_s_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, size, qnext_state_slots);
+                    auto split_name = s_name + '.' + std::to_string(is);
+                    ggml_set_name(split_s_l.tensor_splits[is], split_name.c_str());
+                    mem_split[is] += ggml_nbytes(split_s_l.tensor_splits[is]);
+                }
+                split_s_l.ggml.n_device  = n_device;
+                split_s_l.ggml.split_dim = 0;
+                split_s_l.ggml.splits    = split_s_l.tensor_splits.data();
+                cache.s_l[i]->extra = (void *)&split_s_l.ggml;
+            }
+            continue;
+        }
         if (is_mla_attn && cparams.mla_attn) {
             // DeepSeek MLA
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
@@ -930,6 +970,17 @@ static bool llama_kv_cache_init(
             ggml_tensor * kv = ggml_new_tensor_2d(ctx, primary_kv_type, kv_lora_rank + n_embd_head_qk_rope, kv_size);
             ggml_format_name(kv, "cache_k_l%d", i);
             cache.k_l.push_back(kv);
+            // DSA lightning-indexer key cache for GLM-DSA and GLM-5.3-Flash
+            if ((model.arch == LLM_ARCH_GLM_DSA || model.arch == LLM_ARCH_GLM5NEXT) &&
+                    hparams.indexer_head_size > 0 && model.layers[i].indexer_attn_k &&
+                    hparams.indexer_is_full[i] && cparams.dsa) {
+                const uint32_t idx_row = (model.arch == LLM_ARCH_GLM5NEXT)
+                    ? 2 * hparams.indexer_head_size : hparams.indexer_head_size;
+                const ggml_type idx_type_k = cache.type_k;
+                ggml_tensor * kr = ggml_new_tensor_2d(ctx, idx_type_k, idx_row, kv_size);
+                ggml_format_name(kr, "cache_kr_l%d", i);
+                cache.kr_l[i] = kr;
+            }
             if (!cparams.flash_attn && cparams.mla_attn == 1) {
                 ggml_tensor * kvt = ggml_new_tensor_1d(ctx, cache.type_v, kv_lora_rank*kv_size);
                 ggml_format_name(kvt, "cache_v_l%d", i);
@@ -1083,7 +1134,7 @@ static bool llama_kv_cache_init(
             cache.v_l.push_back(v);
         }
     }
-    if (is_mla_attn && cparams.mla_attn && n_mla < n_layer && n_mla > 0) {
+    if (is_mla_attn && cparams.mla_attn && !llm_arch_is_hybrid(model.arch) && n_mla < n_layer && n_mla > 0) {
         LLAMA_LOG_ERROR("%s: unexpected situation with %d out of %d layers having MLA enabled\n", __func__, n_mla, int(n_layer));
         LLAMA_LOG_ERROR("%s: bailing out\n", __func__);
         GGML_ABORT("fatal error");
@@ -2246,7 +2297,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
     const int n_layer = model.layers.size();
     int n_to_compute = 0;
     for (auto& l : model.layers) {
-        if (!l.wk_b) ++n_to_compute;
+        if (!l.wk_b && l.wkv_b) ++n_to_compute;
     }
     if (mla > 0 && n_to_compute > 0) {
         // Prepare wk_b tensors to enable MLA usage also for model files that do not include
@@ -2276,7 +2327,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
         size_t max_wkv_size = 0;
         size_t max_wk_size = 0;
         for (auto& l : model.layers) {
-            if (!l.wk_b) {
+            if (!l.wk_b && l.wkv_b) {
                 auto new_type = ggml_is_quantized(l.wkv_b->type) ? GGML_TYPE_Q8_0 : l.wkv_b->type;
                 auto size = ggml_row_size(new_type, n_embd_head_qk_nope)*kv_lora_rank*n_head;
                 max_wk_size = std::max(max_wk_size, size);
@@ -2302,7 +2353,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
         std::vector<uint8_t> tensor_data(2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float) + 2*max_wk_size);
         for (int il = 0; il < n_layer; ++il) {
             auto& l = model.layers[il];
-            if (l.wk_b) continue;
+            if (l.wk_b || !l.wkv_b) continue;
             auto wkv_b = *l.wkv_b;
             if (!ggml_backend_buffer_is_host(l.wkv_b->buffer)) {
                 ggml_backend_tensor_get(l.wkv_b, wkv_buffer.data(), 0, ggml_nbytes(l.wkv_b));
@@ -3041,6 +3092,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_GEMMA4,
         LLM_ARCH_DEEPSEEK2,
         LLM_ARCH_GLM_DSA,
+        LLM_ARCH_GLM5NEXT,
         LLM_ARCH_MISTRAL4,
     };
     auto it =  k_supported.find(model.arch);
@@ -4737,6 +4789,82 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         for (int64_t j = 0; j < n_tokens; ++j) {
             // qwen3next linear-attention path uses a single local recurrent state slot.
             data[j] = 0;
+        }
+    }
+
+    // GLM-5.3-Flash k-pool indexer metadata
+    if (lctx.inp_kpool_cells) {
+        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_kpool_cells->buffer));
+        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_kpool_bias->buffer));
+        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_kpool_ape_slots->buffer));
+
+        const int64_t r      = lctx.inp_kpool_ape_slots->ne[0];   // kpool
+        const int64_t n_kv   = kv_self.n;
+        const int64_t n_pool = n_kv / r;
+        const int64_t n_tok  = lctx.inp_kpool_bias->ne[1];
+
+        int32_t * dst_pool_cells = (int32_t *) lctx.inp_kpool_cells->data;
+        float   * dst_pool_bias  = (float   *) lctx.inp_kpool_bias->data;
+        int32_t * dst_ape_slots  = (int32_t *) lctx.inp_kpool_ape_slots->data;
+
+        for (int64_t i = 0; i < r; ++i) {
+            dst_ape_slots[i] = (int32_t) i;
+        }
+
+        std::vector<int32_t> filled(n_pool, 0);
+        std::fill(dst_pool_cells, dst_pool_cells + r * n_pool, 0);
+        for (int64_t i = 0; i < n_kv; ++i) {
+            const auto & cell = kv_self.cells[i];
+            if (cell.pos < 0) continue;
+            const int64_t b = cell.pos / r;
+            if (b >= n_pool) continue;
+            dst_pool_cells[b * r + (cell.pos % r)] = (int32_t) i;
+            filled[b]++;
+        }
+        for (int64_t b = 0; b < n_pool; ++b) {
+            if (filled[b] < (int32_t) r) {
+                std::fill(dst_pool_cells + b * r, dst_pool_cells + (b + 1) * r, 0);
+            }
+        }
+
+        for (int64_t j = 0; j < n_tok && j < (int64_t) batch.n_tokens; ++j) {
+            const llama_pos q = batch.pos[j];
+            float * cur_bias = dst_pool_bias + j * n_pool;
+            for (int64_t b = 0; b < n_pool; ++b) {
+                const bool ok = filled[b] == (int32_t) r && (llama_pos) ((b + 1) * r - 1) <= q;
+                cur_bias[b] = ok ? 0.0f : -INFINITY;
+            }
+        }
+
+        if (lctx.inp_kpool_tail) {
+            GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_kpool_tail->buffer));
+            int32_t * dst_tail = (int32_t *) lctx.inp_kpool_tail->data;
+            const int64_t tail_w = r - 1;
+            llama_pos max_pos = -1;
+            for (int64_t i = 0; i < n_kv; ++i) {
+                if (!kv_self.cells[i].is_empty()) {
+                    max_pos = std::max(max_pos, kv_self.cells[i].pos);
+                }
+            }
+            std::vector<int32_t> cell_of_pos(max_pos + 1 >= 0 ? max_pos + 1 : 0, -1);
+            for (int64_t i = 0; i < n_kv; ++i) {
+                if (!kv_self.cells[i].is_empty()) {
+                    if (kv_self.cells[i].pos >= 0 && kv_self.cells[i].pos < (int64_t) cell_of_pos.size()) {
+                        cell_of_pos[kv_self.cells[i].pos] = (int32_t) i;
+                    }
+                }
+            }
+            std::fill(dst_tail, dst_tail + tail_w * n_tok, 0);
+            for (int64_t j = 0; j < n_tok && j < (int64_t) batch.n_tokens; ++j) {
+                const llama_pos q = batch.pos[j];
+                const llama_pos tail_start = (q + 1) / (llama_pos) r * (llama_pos) r;
+                for (int64_t t = 0; t < tail_w; ++t) {
+                    const llama_pos p = tail_start + t;
+                    if (p <= q && p < (int64_t) cell_of_pos.size() && cell_of_pos[p] >= 0) {
+                        dst_tail[j * tail_w + t] = cell_of_pos[p];
+                    }
+                }
+            }
         }
     }
 
@@ -7329,6 +7457,10 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_GLM_DSA:
         case LLM_ARCH_MISTRAL4:
             return LLAMA_ROPE_TYPE_NORM;
+
+        // GLM5NEXT is NoPE-only (rope.dimension_count = 0)
+        case LLM_ARCH_GLM5NEXT:
+            return LLAMA_ROPE_TYPE_NONE;
 
         // the pairs of head values are offset by n_rot/2
         case LLM_ARCH_FALCON:

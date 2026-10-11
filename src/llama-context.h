@@ -60,6 +60,7 @@ struct llama_kv_cache {
     std::vector<struct ggml_tensor *> k_l; // per layer
     std::vector<struct ggml_tensor *> v_l;
     std::vector<struct ggml_tensor *> s_l; // per layer recurrent state storage (Qwen3Next)
+    std::vector<struct ggml_tensor *> kr_l; // per layer DSA indexer key cache
 
     // When true, the delta_net graph builder will enable per-step SSM state saves
     bool save_per_step_ssm = false;
@@ -298,6 +299,12 @@ struct llama_context {
     struct ggml_tensor * inp_scale = nullptr; // F32 [n_tokens]
     struct ggml_tensor * inp_mtp_states = nullptr;
 
+    // k-pool indexer inputs (GLM5NEXT)
+    struct ggml_tensor * inp_kpool_cells = nullptr;   // I32 [kpool*n_pool]
+    struct ggml_tensor * inp_kpool_bias = nullptr;    // F32 [n_pool, n_tokens]
+    struct ggml_tensor * inp_kpool_tail = nullptr;    // I32 [kpool-1, n_tokens]
+    struct ggml_tensor * inp_kpool_ape_slots = nullptr; // I32 [kpool]
+
     ggml_backend_t ggml_backend_by_name(const char * name);
 
     struct Prev;
@@ -312,6 +319,9 @@ struct llama_context {
         size_t        step = 0;
     };
     std::vector<CacheCopy> cache_copies;
+
+    // DSA cache copies (separate from main cache_copies)
+    std::vector<CacheCopy> dsa_cache_copies;
 
     bool update_cache_copies();
 

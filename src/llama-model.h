@@ -122,6 +122,7 @@ enum e_model {
     MODEL_355B_A32B,
     MODEL_397B_A17B, // Qwen-3.5-MoE
     MODEL_744B_A40B,
+    MODEL_312B_A17B, // GLM-5.3-Flash
     MODEL_E2B,
     MODEL_E4B,
 };
@@ -349,6 +350,9 @@ struct llama_layer {
 
     // mamba
     struct ggml_tensor * ssm_conv1d = nullptr;
+    struct ggml_tensor * ssm_conv1d_q = nullptr; // KDA separate conv filters
+    struct ggml_tensor * ssm_conv1d_k = nullptr;
+    struct ggml_tensor * ssm_conv1d_v = nullptr;
     struct ggml_tensor * ssm_a = nullptr;
     struct ggml_tensor * ssm_d = nullptr;
 
@@ -362,6 +366,22 @@ struct llama_layer {
     struct ggml_tensor * indexer_proj     = nullptr;
     struct ggml_tensor * indexer_attn_k   = nullptr;
     struct ggml_tensor * indexer_attn_q_b = nullptr; // note: for lora a/b, not bias
+    struct ggml_tensor * indexer_comp_wgate = nullptr; // DSA k-pool compressor gate
+    struct ggml_tensor * indexer_comp_ape   = nullptr; // DSA k-pool APE bias
+
+    // KDA low-rank (kimi-k3)
+    struct ggml_tensor * ssm_f_a = nullptr;
+    struct ggml_tensor * ssm_f_b = nullptr;
+    struct ggml_tensor * ssm_g_a = nullptr;
+    struct ggml_tensor * ssm_g_b = nullptr;
+
+    // hyper-connections (mHC)
+    struct ggml_tensor * hc_attn_fn   = nullptr;
+    struct ggml_tensor * hc_attn_base = nullptr;
+    struct ggml_tensor * hc_attn_scale = nullptr;
+    struct ggml_tensor * hc_ffn_fn    = nullptr;
+    struct ggml_tensor * hc_ffn_base  = nullptr;
+    struct ggml_tensor * hc_ffn_scale = nullptr;
 
     // long rope factors
     struct ggml_tensor * rope_long  = nullptr;
@@ -504,7 +524,7 @@ struct llama_model {
     size_t max_nodes(int n_tokens) const {
         auto n_tensors = tensors_by_name.size();
         if (split_mode == LLAMA_SPLIT_MODE_GRAPH && !devices.empty()) n_tensors *= devices.size();
-        if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN35) {
+        if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_GLM5NEXT) {
             return std::max<size_t>(n_tokens * 40, 32u * n_tensors);
         }
         //return std::max<size_t>(1024, 8*n_tensors);
@@ -516,7 +536,7 @@ struct llama_model {
     }
 
     bool is_mla_model() const {
-        return arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4;
+        return arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_MISTRAL4 || arch == LLM_ARCH_GLM5NEXT;
     }
 
     static inline int hadamard_size(int head_size) {

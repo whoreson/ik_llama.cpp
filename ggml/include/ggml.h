@@ -701,6 +701,15 @@ extern "C" {
         GGML_OP_FUSED_NORM,
         GGML_OP_FUSED_RMS_RMS_ADD,
 
+        GGML_OP_BLEND,
+        GGML_OP_INDEXER_TOPK,
+        GGML_OP_MASK_TOPK,
+        GGML_OP_SINKHORN,
+        GGML_OP_HC_PRE,
+        GGML_OP_HC_POST,
+        GGML_OP_MASK_TO_IDX,
+        GGML_OP_DS4_COMP,
+
         GGML_OP_COUNT,
     };
 
@@ -2406,6 +2415,64 @@ extern "C" {
             struct ggml_tensor  * a,
             int                   min_entries,
             float                 threshold);
+
+    GGML_API struct ggml_tensor * ggml_blend(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            float                 c);
+
+    GGML_API struct ggml_tensor * ggml_indexer_mask(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * topk);
+
+    GGML_API struct ggml_tensor * ggml_indexer_topk(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * w,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * blk_idx,
+            enum ggml_unary_op    op,
+            int                   n_top_k);
+
+    GGML_API struct ggml_tensor * ggml_sinkhorn(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                   S,
+            int                   n_iters,
+            float                 eps,
+            bool                  output_transposed);
+
+    GGML_API struct ggml_tensor * ggml_hc_pre(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * x,
+            struct ggml_tensor  * scale,
+            struct ggml_tensor  * bias,
+            int                   S,
+            int                   n_iters,
+            float                 eps);
+
+    GGML_API struct ggml_tensor * ggml_hc_post(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * x,
+            struct ggml_tensor  * post,
+            struct ggml_tensor  * res,
+            struct ggml_tensor  * comb);
+
+    GGML_API struct ggml_tensor * ggml_mask_to_index(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mask,
+            int                   max_row_size);
+
+    GGML_API struct ggml_tensor * ggml_ds4_comp(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * state,
+            struct ggml_tensor  * score,
+            struct ggml_tensor  * idx,
+            int                   ratio,
+            int                   type);
 
     GGML_API struct ggml_tensor * ggml_arange(
             struct ggml_context * ctx,

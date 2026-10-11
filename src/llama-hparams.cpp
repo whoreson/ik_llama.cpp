@@ -1404,6 +1404,100 @@ void llm_load_hparams(
                     ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA, hparams.n_embd_head_v_full);
                 }
             } break;
+        case LLM_ARCH_GLM5NEXT:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                if (hparams.f_norm_eps <= 0.0f) {
+                    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps, false);
+                    if (hparams.f_norm_eps <= 0.0f) {
+                        hparams.f_norm_eps = hparams.f_norm_rms_eps;
+                    }
+                }
+
+                // NextN/MTP block
+                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.nextn_predict_layers, false);
+                if (hparams.nextn_predict_layers > 0) {
+                    const std::string probe = LLM_TN(LLM_ARCH_GLM5NEXT)(LLM_TENSOR_NEXTN_EH_PROJ, "weight",
+                            hparams.n_layer - hparams.nextn_predict_layers);
+                    if (ml.get_tensor_meta(probe.c_str()) == nullptr) {
+                        hparams.nextn_predict_layers = 0;
+                    }
+                }
+
+                // MLA
+                ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,      hparams.n_lora_q);
+                ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,     hparams.n_lora_kv);
+                ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,   hparams.n_embd_head_k_full);
+                ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA, hparams.n_embd_head_v_full);
+
+                // MoE with shared experts
+                ml.get_key(LLM_KV_EXPERT_COUNT,                hparams.n_expert);
+                ml.get_key(LLM_KV_EXPERT_USED_COUNT,           hparams.n_expert_used);
+                ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared, false);
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
+                ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
+                if (hparams.n_ff_shexp == 0 && hparams.n_expert_shared > 0) {
+                    hparams.n_ff_shexp = hparams.n_ff_exp;
+                }
+                ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead, false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale, false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm, false);
+                ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func, false);
+                if (hparams.expert_gating_func == LLM_EXPERT_GATING_FUNC_TYPE_NONE) {
+                    hparams.expert_gating_func = LLM_EXPERT_GATING_FUNC_SIGMOID;
+                }
+
+                // DSA k-pool indexer (optional)
+                ml.get_key(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, hparams.indexer_n_head,    false);
+                ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, hparams.indexer_head_size, false);
+                ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,      hparams.indexer_top_k,     false);
+                ml.get_key(LLM_KV_ATTENTION_INDEXER_KPOOL,      hparams.indexer_block_size, false);
+
+                // Hyper-connections (mHC) - required
+                ml.get_key(LLM_KV_HYPER_CONNECTION_COUNT, hparams.dsv4_hc_mult);
+                ml.get_key(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters);
+                if (!ml.get_key(LLM_KV_HYPER_CONNECTION_EPSILON, hparams.dsv4_hc_eps, false)) {
+                    hparams.dsv4_hc_eps = hparams.f_norm_rms_eps;
+                }
+                if (hparams.dsv4_hc_mult == 0) {
+                    throw std::runtime_error("GLM5NEXT: hyper_connection.count is required");
+                }
+                if (hparams.dsv4_hc_sinkhorn_iters == 0) {
+                    throw std::runtime_error("GLM5NEXT: hyper_connection.sinkhorn_iterations is required");
+                }
+
+                // KDA (kimi-k3 low-rank)
+                ml.get_key(LLM_KV_SSM_CONV_KERNEL, hparams.ssm_d_conv);
+                ml.get_key(LLM_KV_KDA_HEAD_DIM, hparams.ssm_d_state, false);
+                if (hparams.ssm_d_state == 0) {
+                    ml.get_key(LLM_KV_SSM_STATE_SIZE, hparams.ssm_d_state);
+                }
+                ml.get_key(LLM_KV_KDA_GATE_LOWER_BOUND, hparams.kda_gate_lower_bound, false);
+                if (hparams.kda_gate_lower_bound == 0.0f) {
+                    hparams.kda_gate_lower_bound = -5.0f;
+                }
+                GGML_ASSERT(hparams.kda_gate_lower_bound < 0.0f);
+                hparams.ssm_dt_rank = hparams.n_head();
+                hparams.ssm_d_inner = hparams.ssm_d_state * hparams.ssm_dt_rank;
+                if (!ml.get_key(LLM_KV_SSM_GROUP_COUNT, hparams.ssm_n_group, false)) {
+                    hparams.ssm_n_group = hparams.n_head();
+                }
+
+                // Per-layer recurrent layer arrangement
+                for (uint32_t il = 0; il < hparams.n_layer; il++) {
+                    hparams.recurrent_layer_arr[il] = hparams.n_head_kv_arr[il] == 0;
+                }
+                for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+                    hparams.indexer_is_full[il] = !hparams.recurrent_layer_arr[il];
+                }
+
+                hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
+
+                switch (hparams.n_layer - hparams.nextn_predict_layers) {
+                    case 45: model.type = MODEL_312B_A17B; break;
+                    default: model.type = MODEL_UNKNOWN;
+                }
+            } break;
         default: (void)0;
     }
 

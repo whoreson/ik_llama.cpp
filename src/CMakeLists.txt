@@ -58,6 +58,8 @@ add_library(llama
             llama-hparams.cpp
             llama-delta-net.h
             llama-delta-net.cpp
+            llama-kda.h
+            llama-kda.cpp
             unicode.h
             unicode.cpp
             unicode-data.cpp
@@ -105,6 +107,7 @@ add_library(llama
             graphs/build_arctic.cpp
             graphs/build_deepseek2.cpp
             graphs/build_glm4.cpp
+            graphs/build_glm5next.cpp
             graphs/build_bitnet.cpp
             graphs/build_cohere2.cpp
             graphs/build_t5.cpp

@@ -116,6 +116,13 @@ struct llm_build_context {
     ggml_cgraph * build_defrag(const std::vector<uint32_t> & ids);
 
     struct ggml_tensor * build_inp_embd_mtp(struct ggml_tensor * mtp_tok_embd);
+    struct ggml_tensor * build_inp_mtp_states(int64_t n_hidden);
+    struct ggml_tensor * build_mtp_input(
+            const struct llama_layer & mtp_layer,
+            struct ggml_tensor * hidden_state,
+            struct ggml_tensor * token_embd,
+            int il,
+            const char * output_name = "mtp_eh_proj");
 
     ggml_tensor * build_inp_pos();
 
@@ -278,6 +285,40 @@ struct llm_build_context {
             bool is_lite,
             bool pp_opt);
 
+    ggml_cgraph * build_glm5next();
+    ggml_cgraph * build_glm5next_mtp();
+
+    ggml_cgraph * new_graph_custom();
+
+    ggml_tensor * build_mhc_post(
+        ggml_tensor * x,
+        ggml_tensor * post,
+        ggml_tensor * residual,
+        ggml_tensor * comb,
+        int64_t n_embd,
+        int64_t n_stream,
+        bool comb_output_dim0);
+
+    ggml_tensor * build_mhc_weighted_sum(
+        ggml_tensor * x,
+        ggml_tensor * weights,
+        int64_t n_embd,
+        int64_t n_stream);
+
+    ggml_tensor * build_mhc_pre_projection(
+        ggml_tensor * x,
+        ggml_tensor * fn,
+        ggml_tensor * gamma,
+        int64_t n_embd,
+        int64_t n_stream,
+        float norm_rms_eps,
+        bool force_contiguous);
+
+    ggml_tensor * build_glm5next_dsa_top_k(
+            ggml_context * ctx0, ggml_cgraph * gf,
+            ggml_tensor * inp_k_shift,
+            int il);
+
     ggml_cgraph * build_glm4_moe();
 
     ggml_cgraph * build_bitnet();
@@ -397,7 +438,8 @@ struct llm_build_context {
 llm_expert_gating_func_type   gating_op,
          const llm_build_cb & cb, int il, ggml_cgraph * graph = nullptr, bool add_input = false,
          ggml_tensor * up_gate_exps = nullptr, ggml_tensor * up_gate_exps_b = nullptr,
-         ggml_tensor * input_logits = nullptr, ggml_tensor * down_exps_s = nullptr);
+         ggml_tensor * input_logits = nullptr, ggml_tensor * down_exps_s = nullptr,
+         ggml_tensor * selected_experts = nullptr);
 
     static ggml_tensor * llm_build_moe_ffn(ggml_context * ctx, llama_context & lctx,
          ggml_tensor * cur,
@@ -425,7 +467,7 @@ llm_expert_gating_func_type   gating_op,
                 n_expert, n_expert_used,
                 type_op, norm_w, scale_w, w_scale,
                 gating_op, cb, il, graph, add_input, up_gate_exps, up_gate_exps_b,
-                input_logits, down_exps_s);
+                input_logits, down_exps_s, nullptr);
     }
 
     static ggml_tensor * llm_build_std_moe_ffn(ggml_context * ctx, llama_context & lctx,
