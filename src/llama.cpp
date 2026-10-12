@@ -950,7 +950,7 @@ static bool llama_kv_cache_init(
             ggml_set_name(s, s_name.c_str());
             cache.s_l[i] = s;
             cache.k_l.push_back(nullptr);
-            cache.v_l.push_back(nullptr);
+            if (needs_v_cache) cache.v_l.push_back(nullptr);
             LLAMA_LOG_DEBUG("=== Created recurrent cache %s as %ld x %ld x %ld x %ld\n", s->name, s->ne[0], s->ne[1], s->ne[2], s->ne[3]);
             if (split_cache && model.layers[i].ssm_out->extra) {
                 auto split_ssm_out = (const ggml_split_tensor_t *)model.layers[i].ssm_out->extra;
@@ -1032,7 +1032,7 @@ static bool llama_kv_cache_init(
             const bool is_mtp_layer = (cparams.mtp_op_type != MTP_OP_NONE && i >= (int)n_mtp_first_layer);
             if (!hparams.has_kv(i) && !is_mtp_layer) {
                 cache.k_l.push_back(nullptr);
-                cache.v_l.push_back(nullptr);
+                if (needs_v_cache) cache.v_l.push_back(nullptr);
                 continue;
             }
             if (qnext_recurrent) {
@@ -1041,7 +1041,7 @@ static bool llama_kv_cache_init(
                 ggml_set_name(s, s_name.c_str());
                 cache.s_l[i] = s;
                 cache.k_l.push_back(nullptr);
-                cache.v_l.push_back(nullptr);
+                if (needs_v_cache) cache.v_l.push_back(nullptr);
                 LLAMA_LOG_DEBUG("=== Created recurrent cache %s as %ld x %ld x %ld x %ld\n", s->name, s->ne[0], s->ne[1], s->ne[2], s->ne[3]);
                 if (split_cache && model.layers[i].ssm_out->extra) {
                     auto split_ssm_out = (const ggml_split_tensor_t *)model.layers[i].ssm_out->extra;
@@ -7990,6 +7990,21 @@ static size_t llama_spec_ckpt_cpu_state_reserve(const llama_context * ctx, llama
             size += (size_t) s_rows * s_size_row;
         }
     }
+
+    // DSA indexer cache (use kv_self.size as upper bound for cell count)
+    const uint32_t dsa_indexer_state = !kv_self.kr_l.empty() ? 1 : 0;
+    size += sizeof(dsa_indexer_state);
+    if (dsa_indexer_state != 0) {
+        for (uint32_t il = 0; il < n_layer; ++il) {
+            const bool has_kr_cache = il < kv_self.kr_l.size() && kv_self.kr_l[il] != nullptr;
+            size += sizeof(int32_t) + sizeof(uint64_t);
+            if (has_kr_cache) {
+                const uint64_t kr_size_row = ggml_row_size(kv_self.kr_l[il]->type, kv_self.kr_l[il]->ne[0]);
+                size += (size_t) kv_self.size * kr_size_row;
+            }
+        }
+    }
+
     return size;
 }
 
@@ -8391,7 +8406,8 @@ struct llama_data_write {
         }
 
         if (v_state == 0) {
-            for (uint32_t il = 0; il < n_layer; ++il) {
+            const uint32_t n_v_layer = kv_self.v_l.size();
+            for (uint32_t il = 0; il < n_v_layer; ++il) {
                 const uint32_t n_embd_v_gqa = llama_kv_v_row_embd(ctx->model, hparams, il);
                 const bool has_v_cache = kv_self.v_l[il] != nullptr && need_kv;
 
@@ -8483,6 +8499,29 @@ struct llama_data_write {
 
                 if (has_s_cache && s_rows > 0) {
                     write_tensor_data(kv_self.s_l[il], s_offset, s_rows * s_size_row, il);
+                }
+            }
+        }
+
+        // DSA lightning-indexer key cache (kv_self.kr_l): one row per cell, like K/V.
+        const uint32_t dsa_indexer_state = !kv_self.kr_l.empty() ? 1 : 0;
+        write(&dsa_indexer_state, sizeof(dsa_indexer_state));
+
+        if (dsa_indexer_state != 0) {
+            for (uint32_t il = 0; il < n_layer; ++il) {
+                const bool has_kr_cache = need_kv && il < kv_self.kr_l.size() && kv_self.kr_l[il] != nullptr;
+                if (!has_kr_cache) continue;
+
+                const int32_t kr_type_i = (int32_t) kv_self.kr_l[il]->type;
+                write(&kr_type_i, sizeof(kr_type_i));
+
+                const uint64_t kr_size_row = ggml_row_size(kv_self.kr_l[il]->type, kv_self.kr_l[il]->ne[0]);
+                write(&kr_size_row, sizeof(kr_size_row));
+
+                for (const auto & range : cell_ranges) {
+                    const size_t range_size = range.second - range.first;
+                    const size_t buf_size = range_size * kr_size_row;
+                    write_tensor_data(kv_self.kr_l[il], range.first * kr_size_row, buf_size, il);
                 }
             }
         }
@@ -8833,7 +8872,8 @@ struct llama_data_read {
         }
 
         if (v_state == 0) {
-            for (uint32_t il = 0; il < n_layer; ++il) {
+            const uint32_t n_v_layer = kv_self.v_l.size();
+            for (uint32_t il = 0; il < n_v_layer; ++il) {
                 const uint32_t n_embd_v_gqa = llama_kv_v_row_embd(ctx->model, hparams, il);
                 const bool has_v_cache = kv_self.v_l[il] != nullptr && need_kv;
 
@@ -9015,6 +9055,31 @@ struct llama_data_read {
                 }
             }
         }
+
+        // DSA lightning-indexer key cache (kv_self.kr_l)
+        uint32_t dsa_indexer_state;
+        read_to(&dsa_indexer_state, sizeof(dsa_indexer_state));
+
+        if (dsa_indexer_state != 0) {
+            for (uint32_t il = 0; il < n_layer; ++il) {
+                const bool has_kr_cache = need_kv && il < kv_self.kr_l.size() && kv_self.kr_l[il] != nullptr;
+                if (!has_kr_cache) continue;
+
+                int32_t kr_type_i;
+                read_to(&kr_type_i, sizeof(kr_type_i));
+
+                uint64_t kr_size_row;
+                read_to(&kr_size_row, sizeof(kr_size_row));
+
+                for (uint32_t i = 0; i < cell_count; ++i) {
+                    const size_t buf_size = kr_size_row;
+                    ggml_backend_tensor_set(kv_self.kr_l[il], read(buf_size), i * kr_size_row, buf_size);
+                }
+            }
+        } else if (dsa_indexer_state == 0 && !kv_self.kr_l.empty()) {
+            // Old state file without DSA indexer data - kr_l stays zeroed
+        }
+
         return true;
     }
 
