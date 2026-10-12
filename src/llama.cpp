@@ -7997,9 +7997,9 @@ static size_t llama_spec_ckpt_cpu_state_reserve(const llama_context * ctx, llama
     if (dsa_indexer_state != 0) {
         for (uint32_t il = 0; il < n_layer; ++il) {
             const bool has_kr_cache = il < kv_self.kr_l.size() && kv_self.kr_l[il] != nullptr;
-            size += sizeof(int32_t) + sizeof(uint64_t);
             if (has_kr_cache) {
                 const uint64_t kr_size_row = ggml_row_size(kv_self.kr_l[il]->type, kv_self.kr_l[il]->ne[0]);
+                size += sizeof(int32_t) + sizeof(uint64_t);
                 size += (size_t) kv_self.size * kr_size_row;
             }
         }
@@ -8510,16 +8510,13 @@ struct llama_data_write {
         if (dsa_indexer_state != 0) {
             for (uint32_t il = 0; il < n_layer; ++il) {
                 const bool has_kr_cache = need_kv && il < kv_self.kr_l.size() && kv_self.kr_l[il] != nullptr;
+                if (!has_kr_cache) continue;
 
-                const int32_t kr_type_i = has_kr_cache ? (int32_t) kv_self.kr_l[il]->type : -1;
+                const int32_t kr_type_i = (int32_t) kv_self.kr_l[il]->type;
                 write(&kr_type_i, sizeof(kr_type_i));
 
-                const uint64_t kr_size_row = has_kr_cache ? ggml_row_size(kv_self.kr_l[il]->type, kv_self.kr_l[il]->ne[0]) : 0;
+                const uint64_t kr_size_row = ggml_row_size(kv_self.kr_l[il]->type, kv_self.kr_l[il]->ne[0]);
                 write(&kr_size_row, sizeof(kr_size_row));
-
-                if (!has_kr_cache) {
-                    continue;
-                }
 
                 for (const auto & range : cell_ranges) {
                     const size_t range_size = range.second - range.first;
