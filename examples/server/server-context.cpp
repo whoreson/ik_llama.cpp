@@ -3651,7 +3651,18 @@ void server_context::apply_checkpoint(server_slot & slot) {
                 slot.server_cached_prompt.checkpoints.rbegin(),
                 slot.server_cached_prompt.checkpoints.rend(),
                 [&](const auto & cur) {
-                    return cur.pos_min < pos_min_thold || cur.pos_min == 0;
+                    if (!(cur.pos_min < pos_min_thold || cur.pos_min == 0)) {
+                        return false;
+                    }
+                    // The checkpoint's cache index must be a token boundary shared with the new
+                    // prompt. If it falls inside a span where cache and prompt tokenize the same
+                    // text differently, n_past (cache index) and n_past_prompt (prompt index)
+                    // would desync and prompt tokens would be re-appended after the kept cache
+                    // tokens, duplicating text in the cache.
+                    const llama_pos pos_c = std::min(pos_next, std::max(cur.pos_min + 1, cur.pos_max));
+                    const size_t n_c = slot.cache_tokens.size_up_to_pos(pos_c);
+                    const auto pfx = slot.cache_tokens.get_common_prefix_first_n(ctx, slot.prompt_tokens, n_c);
+                    return pfx.first == n_c;
                 }
             );
 
